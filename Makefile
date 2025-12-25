@@ -197,10 +197,8 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_sixfive\
 	$U/_sleep\
-	$U/_genfiles
-
-
-
+	$U/_genfiles\
+	$U/_find
 
 ifeq ($(LAB),syscall)
 UPROGS += \
