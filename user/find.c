@@ -76,8 +76,7 @@ int find(char * dirname, char * filename) {
     }
 
     if(st.type == T_DIR) {
-      if(strcmp(de.name, ".") != 0 && strcmp(de.name, "..")) {
-        // recurse
+      if(strcmp(de.name, ".") != 0 && strcmp(de.name, "..") != 0) {
         find(dirent_buf, filename);
       }
     }
@@ -93,14 +92,8 @@ int main(int argc, char * argv[]) {
     print_usage_message();
     exit(1);
   }
-  char * dirname = argv[1];
-  char * filename = argv[2];
-  
-  char dir_buf[512];
-  dir_buf[0] = '\0';
 
-  append_subdirectory(dir_buf, dirname);
-  int result = find(dir_buf, filename);
+  int result = find(argv[1], argv[2]);
   exit(result);
 }
 
