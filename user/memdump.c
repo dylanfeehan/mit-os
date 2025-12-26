@@ -60,6 +60,45 @@ main(int argc, char *argv[])
 void
 memdump(char *fmt, char *data)
 {
+  // print the contents of the memory pointed to by data 
+  // in the format described by the fmt argument. 
+  // The format is a C string. 
+  // Each character of the string indicates how to print successive parts of the data. 
   // Your code here.
-
+  int i = 0;
+  char token;
+  while ((token = *(fmt + i)) != '\0') {
+    switch (token) {
+      case 'i': 
+        printf("%d", *(int*)data);
+        data += 4;
+        break;
+      case 'p': 
+        printf("%lx", *(long*)data);
+        data += 8;
+        break;
+      case 'h': 
+        printf("%d", *(short*)data);
+        data += 2;
+        break;
+      case 'c': 
+        printf("%c", *data);
+        data += 1;
+        break;
+      case 's': 
+        printf("%s", (char *)*(char **)data);
+        data += 8;
+        break;
+      case 'S': 
+        printf("%s", data);
+        break;
+      default: 
+        printf("Error processing input. %c is not a valid token.\n", token);
+        return;
+    }
+    i += 1;
+    printf("\n");
+  }
+  printf("\n");
 }
+

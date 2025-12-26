@@ -3,12 +3,30 @@
 #include "../kernel/fcntl.h"
 #include "../kernel/stat.h"
 #include "../kernel/fcntl.h"
+#include "../kernel/param.h"
+#include "find.h"
 #include "user.h"
 
 void print_usage_message() {
-  printf("Usage: find <dir> <filename> // where dir the subtree to begin searchign in\n");
+  printf("Usage: find <dir> <filename>\nfind <dir> <filename> -exec <cmd> // where dir the subtree to begin searchign in\n");
 }
 
+int cmd_file(char * filename, void * context) {
+  //char * args[MAXARG]; // allocate array of char pointers
+  struct ctx * argv_ptr = (struct ctx *)context;
+  argv_ptr->argv[argv_ptr->argc] = filename;
+  int pid = fork();
+  if(pid == 0) {
+    exec(argv_ptr->argv[0], argv_ptr->argv);
+  }
+  wait(0);
+  return 0;
+}
+
+int display_file(char * filename, void * context) {
+  printf("%s\n", filename);
+  return 0;
+}
 
 int append_subdirectory(char * dirname, char * subdirname) {
   int len = strlen(dirname);
@@ -36,7 +54,7 @@ int readstat(char * dirname, struct stat * st) {
   return fd;
 }
 
-int find(char * dirname, char * filename) {
+int find(char * dirname, char * filename, int (*callback)(char *, void *), struct ctx * context) {
   struct stat st;
   struct dirent de;
   char dirent_buf[512];
@@ -71,13 +89,13 @@ int find(char * dirname, char * filename) {
 
     if(st.type == T_FILE || st.type == T_DIR) {
       if(strcmp(de.name, filename) == 0) {
-        printf("%s/%s\n", dirname, filename);
+        callback(dirent_buf, context);
       }
     }
 
     if(st.type == T_DIR) {
       if(strcmp(de.name, ".") != 0 && strcmp(de.name, "..") != 0) {
-        find(dirent_buf, filename);
+        find(dirent_buf, filename, callback, context);
       }
     }
   }
@@ -87,13 +105,29 @@ int find(char * dirname, char * filename) {
 }
 
 int main(int argc, char * argv[]) {
-  if(argc != 3) {
-    printf("Error: 2 arguments required, %d provided.\n", argc - 1);
+  int cmd = 0;
+  int cmd_argc = argc - 4;
+  struct ctx context;
+  if(argc != 3 && argc < 5) {
+    printf("Error: 2 or 4+ arguments required, %d provided.\n", argc - 1);
     print_usage_message();
     exit(1);
   }
+  if(argc >= 5 && strcmp(argv[3], "-exec") == 0) {
+    int i;
+    for (i = 0; i < cmd_argc; i++) {
+      context.argv[i] = argv[i + 4];
+    }
+    context.argc = cmd_argc;
+    cmd = 1;
+  } else {
+    if(argc >= 5) {
+      printf("Error: unsupported flag: %s.\n", argv[3]);
+      exit(1);
+    }
+  }
 
-  int result = find(argv[1], argv[2]);
+  int result = find(argv[1], argv[2], cmd ? (cmd_file) : (display_file), &context);
   exit(result);
 }
 
