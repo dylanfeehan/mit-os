@@ -83,6 +83,8 @@ enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
 struct proc {
+  int syscall_mask;
+  char open_exec_allowed_paths[512];
   struct spinlock lock;
 
   // p->lock must be held when using these:

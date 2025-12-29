@@ -105,3 +105,20 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// sandbox a process by enabling bits in its syscall_mask that are enabled in mask  
+uint64
+sys_interpose(void)
+{
+  int mask;
+  char path[MAXPATH];
+  argint(0, &mask); // fetch argument from register a0
+  argstr(1, path, MAXPATH);
+
+  struct proc * p = myproc();
+  int prev_syscall_mask = p->syscall_mask;
+  p->syscall_mask = prev_syscall_mask | mask;
+  memmove(p->open_exec_allowed_paths, path, MAXPATH);
+  return 1;
+}
+

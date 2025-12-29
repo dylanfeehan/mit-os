@@ -101,6 +101,7 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
+extern uint64 sys_interpose(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -126,7 +127,35 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_interpose] sys_interpose,
 };
+
+int syscall_path_whitelisted(struct proc * p) {
+  char path[MAXPATH];
+  argstr(0, path, MAXPATH);
+  int len = strlen(p->open_exec_allowed_paths);
+  return strncmp(p->open_exec_allowed_paths, path, len) == 0;
+}
+
+int index_bit(int num, int index) {
+  unsigned int unsigned_num = (unsigned int) num;
+  return (unsigned_num >> index) & 1;
+}
+
+int syscall_disabled(int syscall_num, struct proc * p) {
+  // syscall N is disabled if (0 | 1 << N) >> N == 1
+  int mask = p->syscall_mask;
+  int syscall_disabled = index_bit(mask, syscall_num);
+  if(syscall_disabled && (syscall_num == SYS_open || syscall_num == SYS_exec)) {
+    return !syscall_path_whitelisted(p);
+  } else {
+    return syscall_disabled;
+  }
+}
+
+int syscall_enabled(int syscall_num, struct proc * p) {
+  return !syscall_disabled(syscall_num, p);
+}
 
 void
 syscall(void)
@@ -135,6 +164,11 @@ syscall(void)
   struct proc *p = myproc();
 
   num = p->trapframe->a7;
+
+  if(syscall_disabled(num, p)) {
+      p->trapframe->a0 = -1;
+      return;
+  } 
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     // Use num to lookup the system call function for num, call it,
     // and store its return value in p->trapframe->a0
