@@ -268,6 +268,11 @@ kfork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
+  
+  // Copy syscall mask and open_exec_allowed_path
+  // np->open_exec_allowed_paths = p->open_exec_allowed_paths;
+  strncpy(np->open_exec_allowed_paths, p->open_exec_allowed_paths, MAXPATH);
+  np->syscall_mask = p->syscall_mask;
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
