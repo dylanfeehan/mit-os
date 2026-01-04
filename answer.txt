@@ -1,0 +1,12 @@
+va 0 pte 0x21FCF45B pa 0x87F3D000 perm 0x5B
+
+- for address 0, the number to the right of "pte" is the pte of the level 2 page table. this is the final page table, indexed by the lowest 9 bits of the 27 bits of the VA that index the page tables. whereas PT2 and PT2 PTEs contain PPN of n-1 page table, PT0 PPN is the PPN of the actual physical address. To get the PPN, shift pte >> (right) by 10 bits 
+- 0x21FCF45B -> 0x21FCF4 (rids 8 bits), in binary: 0010 0001 1111 1100 1111 0100, drop last two bits : (see below)
+- 0010 0001 1111 1100 1111 01 -> 1000 0111 1111 0011 1101 -> 87F3D, this indexes page -> 87F3D000 (to add the offset bitch now it indexes a char (byte)
+
+
+va 1000 pte 0x21FCE85B pa 0x87F3A000 perm 0x5B
+...
+va 0xFFFFD000 pte 0x0 pa 0x0 perm 0x0
+va 0xFFFFE000 pte 0x21FD80C7 pa 0x87F60000 perm 0xC7
+va 0xFFFFF000 pte 0x20001C4B pa 0x80007000 perm 0x4B

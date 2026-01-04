@@ -140,13 +140,51 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+void print_pte(uint64 pte, uint64 pa, int level, uint64 va) {
+  char * prefix;
+  switch (level) {
+    case 2:
+    prefix = "..";
+    break;
+  case 1:
+    prefix = ".. ..";
+    break;
+  case 0:
+    prefix = ".. .. ..";
+    break;
+  default: 
+    prefix = "";
+    break;
 
-#if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
+  }
+
+  printf("%s%px pte %px pa %px\n", prefix, (uint64 *)va, (uint64 *)pte, (uint64 *)pa);
+}
+
+void vmprint_helper(pagetable_t pagetable, int level, uint64 va) {
+  for(int offset = 0; offset < 512; offset++){
+    uint64 curr_va = va | ((offset << (9 * level)) << 12);
+    pte_t pte = pagetable[offset];
+    if(pte & PTE_V) {
+      print_pte(pte, PTE2PA(pte), level, curr_va);
+    }
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      vmprint_helper((pagetable_t)child, level - 1, curr_va);
+    } else if(pte & PTE_V){
+      return; // don't recurse when at a level 0 page table
+    }
+  }
+}
+
+
+//#if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
 void
 vmprint(pagetable_t pagetable) {
-  // your code here
+  vmprint_helper(pagetable, 2, 0); 
 }
-#endif
+//#endif
 
 
 
