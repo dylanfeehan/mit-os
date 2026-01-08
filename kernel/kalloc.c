@@ -14,14 +14,43 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+int num_superpages = 5;
+
 struct run {
   struct run *next;
 };
 
+
 struct {
   struct spinlock lock;
   struct run *freelist;
+  struct run *freelist_super;
 } kmem;
+
+void
+ksuperfree(void *pa)
+{
+  struct run *r;
+
+  if(((uint64)pa % PGSUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, PGSUPERPGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&kmem.lock);
+  r->next = kmem.freelist_super;
+  kmem.freelist_super = r;
+  release(&kmem.lock);
+}
+
+void *
+ksuperalloc(void)
+{
+  return 0;
+}
 
 void
 kinit()
@@ -34,7 +63,10 @@ void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
+  p = (char*)PGSUPERPGROUNDUP((uint64)pa_start);
+  int i;
+  for(i = 0; i <= num_superpages && p + PGSUPERPGSIZE <= (char*)pa_end; p += PGSUPERPGSIZE, i++)
+    ksuperfree(p);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
 }
@@ -80,3 +112,4 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
