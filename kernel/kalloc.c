@@ -14,7 +14,7 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
-int num_superpages = 5;
+int num_superpages = 10;
 
 struct run {
   struct run *next;
@@ -49,7 +49,17 @@ ksuperfree(void *pa)
 void *
 ksuperalloc(void)
 {
-  return 0;
+  struct run *r;
+
+  acquire(&kmem.lock);
+  r = kmem.freelist_super;
+  if(r)
+    kmem.freelist_super = r->next;
+  release(&kmem.lock);
+
+  if(r)
+    memset((char*)r, 5, PGSUPERPGSIZE); // fill with junk
+  return (void*)r;
 }
 
 void
