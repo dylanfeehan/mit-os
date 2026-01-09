@@ -14,20 +14,92 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+// the number of superpages for kinit to set aside during initialization
+// these superpages will go in freelist_super
+int num_superpages = 10;
+
 struct run {
   struct run *next;
 };
 
+
 struct {
   struct spinlock lock;
   struct run *freelist;
+  // freelist of superpages
+  struct run *freelist_super;
 } kmem;
+
+// basically copied kfree but used superpages
+void
+ksuperfree(void *pa)
+{
+  struct run *r;
+
+  if(((uint64)pa % PGSUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, PGSUPERPGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&kmem.lock);
+  r->next = kmem.freelist_super;
+  kmem.freelist_super = r;
+  release(&kmem.lock);
+}
+
+// basically the same as kalloc but used superpages
+void *
+ksuperalloc(void)
+{
+  struct run *r;
+
+  acquire(&kmem.lock);
+  r = kmem.freelist_super;
+  if(r)
+    kmem.freelist_super = r->next;
+  release(&kmem.lock);
+
+  if(r)
+    memset((char*)r, 5, PGSUPERPGSIZE); // fill with junk
+  return (void*)r;
+}
+
+// pa_end is basically the first byte-level address that should NOT belong to free memory
+void
+superfreerange(void *pa_start, void *pa_end)
+{
+  char * p = (char *)pa_start;
+  if(((uint64)p % PGSUPERPGSIZE) != 0) {
+    panic("superfreerange: misalgined");
+  }
+  for(; p + PGSUPERPGSIZE <= (char*)pa_end; p += PGSUPERPGSIZE) {
+    ksuperfree(p);
+  }
+
+  // panic if for some reason we did not reach pa_end
+  if(p != pa_end) {
+    printf("p:%p\nend:%p\n", (p + PGSUPERPGSIZE), pa_end);
+    panic("superfreerange: misalgined");
+  }
+}
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  // end of kernel image is start of physical memory available for allocation
+  void * start = (void*)end;
+  // round up start to be superpage aligned
+  start = (void*)PGSUPERPGROUNDUP((uint64)start);
+
+  // free <num_superpages> superpages.  
+  void * end_superpages = (void*)(start + (num_superpages * PGSUPERPGSIZE));
+  superfreerange(start, end_superpages);
+  // free the rest of physical memory with regular pages
+  freerange(end_superpages, (void*)PHYSTOP);
 }
 
 void
@@ -35,8 +107,9 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -68,6 +141,7 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
+
   struct run *r;
 
   acquire(&kmem.lock);
@@ -80,3 +154,4 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+

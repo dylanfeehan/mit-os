@@ -92,13 +92,20 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+//
+//  Modified to take a parameter tolevel.
+//  walk will walk down to tolevel. It is usually 0, 
+//  but can be set to 1 for the purposes of mapping superpages
+//  (superpage PTE leaves are in the level 1 page table, 
+//  since the lower 21 bits are the 2MB offset, not 12 for 4kb
+
 pte_t *
-walk(pagetable_t pagetable, uint64 va, int alloc)
+walk(pagetable_t pagetable, uint64 va, int alloc, int tolevel)
 {
   if(va >= MAXVA)
     panic("walk");
 
-  for(int level = 2; level > 0; level--) {
+  for(int level = 2; level > tolevel; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
@@ -108,13 +115,14 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
       }
 #endif
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0) {
         return 0;
+      }
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
-  return &pagetable[PX(0, va)];
+  return &pagetable[PX(tolevel, va)];
 }
 
 // Look up a virtual address, return the physical address,
@@ -129,7 +137,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(va >= MAXVA)
     return 0;
 
-  pte = walk(pagetable, va, 0);
+  pte = walk(pagetable, va, 0, 0);
   if(pte == 0)
     return 0;
   if((*pte & PTE_V) == 0)
@@ -194,8 +202,9 @@ vmprint(pagetable_t pagetable) {
 void
 kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
 {
-  if(mappages(kpgtbl, va, sz, pa, perm) != 0)
+  if(mappages(kpgtbl, va, sz, pa, perm) != 0) {
     panic("kvmmap");
+  }
 }
 
 // Create PTEs for virtual addresses starting at va that refer to
@@ -203,6 +212,22 @@ kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
 // va and size MUST be page-aligned.
 // Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+//
+// regarding superpages, no assumptions can be made other than va nad size are page aligned
+// so even if size > PGSUPERPGSIZE, we might not be able to fit an ALIGNED superpage
+// And if we can fit an ALIGNED superpage, va isn't necessarily superpage aligned, 
+// so we might need to put pages before and/or after the superpage
+//
+// therefore, during the loop, we check if address is superpage aligned 
+// and if there's room for one.
+//
+// also, to calculate the last page, (the one to stop on), 
+// it needs to be known whether that will be a page or a superpage
+//
+// if the end address, (va + size), MINUS PGSUPERPGSIZE, is 2MB aligned, 
+// AND >= the start address, (va), then the last mapped page will be a superpage
+// otherwise the last mapped page will be a regular page
+//
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -212,24 +237,66 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   if((va % PGSIZE) != 0)
     panic("mappages: va not aligned");
 
+  if(size == PGSUPERPGSIZE && (va % PGSUPERPGSIZE) != 0)
+    panic("mappages: va not superpage aligned when mapping superpage");
+
   if((size % PGSIZE) != 0)
     panic("mappages: size not aligned");
 
   if(size == 0)
-    panic("mappages: size");
-  
+    panic("mappages: size is 0");
+
+  uint64 end = va + size;
   a = va;
-  last = va + size - PGSIZE;
+  // is a superpage at the end of the allocation range superpage aligned? 
+  // If so, the last allocated page will be a superpage
+  // Otherwise, the last allocated page will be a page
+  // look at function comment for more info
+  // TODO: >= is hard
+  if ((end - PGSUPERPGSIZE) % PGSUPERPGSIZE == 0 && (end - PGSUPERPGSIZE) >= va) {
+    last = va + size - PGSUPERPGSIZE;
+  } else {
+    last = va + size - PGSIZE;
+  }
+
+  int tolevel;
+  int i = 0;
   for(;;){
-    if((pte = walk(pagetable, a, 1)) == 0)
+    // TODO: verify the end logic. that <= could be very problematic
+    // if there's room for a superpage, map use a superpage
+    if(a % PGSUPERPGSIZE == 0 && (a + PGSUPERPGSIZE) <= (va + size)) {
+      // tolevel will ALSO tell us, during the scope of this loop, whether or not 
+      // we are mapping a superpage
+      tolevel = 1;
+      i++;
+    } else {
+      tolevel = 0;
+    }
+
+    if((pte = walk(pagetable, a, 1, tolevel)) == 0) {
       return -1;
+    }
+
     if(*pte & PTE_V)
       panic("mappages: remap");
-    *pte = PA2PTE(pa) | perm | PTE_V;
+    
+    if(tolevel) {
+      // SUPERPA2PTE is part of superpages!
+      *pte = SUPERPA2PTE(pa) | perm | PTE_V;
+    } else {
+      *pte = PA2PTE(pa) | perm | PTE_V;
+    }
+
     if(a == last)
       break;
-    a += PGSIZE;
-    pa += PGSIZE;
+
+    if(tolevel) {
+      a += PGSUPERPGSIZE;
+      pa += PGSUPERPGSIZE;
+    } else {
+      a += PGSIZE;
+      pa += PGSIZE;
+    }
   }
   return 0;
 }
@@ -261,7 +328,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += sz){
-    if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
+    if((pte = walk(pagetable, a, 0, 0)) == 0) // leaf page table entry allocated?
       continue;
     if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
@@ -291,8 +358,22 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += sz){
-    sz = PGSIZE;
-    mem = kalloc();
+    // TODO: unsure about this <=
+    // if address is 2mb aligned and there's room for a superpage
+    if(a % PGSUPERPGSIZE == 0 && (a + PGSUPERPGSIZE) <= newsz) {
+      // size will also indicate whether or not a superpage is being allocated
+      sz = PGSUPERPGSIZE;
+    } else {
+      sz = PGSIZE;
+    }
+
+    if(sz == PGSUPERPGSIZE) {
+      mem = ksuperalloc();
+    } else {
+      mem = kalloc();
+    }
+    // TODO: superpage implications?
+    // mem is zero when there's no more free physical ram
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
@@ -301,7 +382,9 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
     memset(mem, 0, sz);
  #endif
     if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
-      kfree(mem);
+      // TODO: superpage implications?
+      ksuperfree(mem);
+      // TODO: superpage implications?
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -374,7 +457,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   int szinc = PGSIZE;
 
   for(i = 0; i < sz; i += szinc){
-    if((pte = walk(old, i, 0)) == 0)
+    if((pte = walk(old, i, 0, 0)) == 0)
       continue;
     if((*pte & PTE_V) == 0) {
       continue;
@@ -404,7 +487,7 @@ uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
   
-  pte = walk(pagetable, va, 0);
+  pte = walk(pagetable, va, 0, 0);
   if(pte == 0)
     panic("uvmclear");
   *pte &= ~PTE_U;
@@ -431,7 +514,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
       }
     }
 
-    if((pte = walk(pagetable, va0, 0)) == 0) {
+    if((pte = walk(pagetable, va0, 0, 0)) == 0) {
       // printf("copyout: pte should exist %lx %ld\n", dstva, len);
       return -1;
     }
@@ -557,7 +640,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
 
 int
 ismapped(pagetable_t pagetable, uint64 va) {
-  pte_t *pte = walk(pagetable, va, 0);
+  pte_t *pte = walk(pagetable, va, 0, 0);
   if (pte == 0) {
     return 0;
   }
@@ -572,6 +655,6 @@ ismapped(pagetable_t pagetable, uint64 va) {
 #ifdef LAB_PGTBL
 pte_t*
 pgpte(pagetable_t pagetable, uint64 va) {
-  return walk(pagetable, va, 0);
+  return walk(pagetable, va, 0, 0);
 }
 #endif

@@ -358,6 +358,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #endif // __ASSEMBLER__
 
 #define PGSIZE 4096 // bytes per page
+#define PGSUPERPGSIZE 2097152 // bytes per superpage
 #define PGSHIFT 12  // bits of offset within a page
 
 #ifdef LAB_PGTBL
@@ -367,6 +368,8 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #endif
 
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
+// copied PGROUNDUP and used PGSUPERPGSIZE
+#define PGSUPERPGROUNDUP(sz)  (((sz)+PGSUPERPGSIZE-1) & ~(PGSUPERPGSIZE-1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
 
 #define PTE_V (1L << 0) // valid
@@ -383,6 +386,17 @@ typedef uint64 *pagetable_t; // 512 PTEs
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
+// directly from the RISC-V page translation algorithm spec:
+//    - A leaf PTE has been reached. If i>0 and pte.ppn[i-1:0] ≠ 0, this is a misaligned superpage; stop
+//    - and raise a page-fault exception corresponding to the original access type.
+//
+//    - If i>0, then this is a superpage translation and pa.ppn[i-1:0] = va.vpn[i-1:0].
+//    - pa.ppn[LEVELS-1:i] = pte.ppn[LEVELS-1:i].
+//    it's 10pm on a work night i'm not explaining this shit, but there it is
+//
+// shift the physical address right by 21 since it should be superpage aligned 
+// then shift left by 19. 10 for PTE flags, 9 because PPN[0] needs to be 0 (see above)
+#define SUPERPA2PTE(pa) ((((uint64)pa) >> 21) << 19)
 
 #define PTE2PA(pte) (((pte) >> 10) << 12)
 
