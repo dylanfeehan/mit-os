@@ -99,6 +99,8 @@ kvminithart()
 //  (superpage PTE leaves are in the level 1 page table, 
 //  since the lower 21 bits are the 2MB offset, not 12 for 4kb
 
+// encode the level at which the the walk stopped
+// in the upper 2 bits of PTE
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc, int tolevel)
 {
@@ -109,11 +111,10 @@ walk(pagetable_t pagetable, uint64 va, int alloc, int tolevel)
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
-#ifdef LAB_PGTBL
       if(PTE_LEAF(*pte)) {
+        //*pte = (*pte) | LEVEL2PTE(level);
         return pte;
       }
-#endif
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0) {
         return 0;
@@ -122,7 +123,56 @@ walk(pagetable_t pagetable, uint64 va, int alloc, int tolevel)
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
-  return &pagetable[PX(tolevel, va)];
+  pte_t * pte = &pagetable[PX(tolevel, va)];
+  //*pte = (*pte) | LEVEL2PTE(0);
+  return pte;
+}
+
+// Same as walk but returns the pte_t pte instaed of pte_t * pte
+// this way the level can be encoded
+//
+// Return the address of the PTE in page table pagetable
+//
+// that corresponds to virtual address va.  If alloc!=0,
+// create any required page-table pages.
+//
+// The risc-v Sv39 scheme has three levels of page-table
+// pages. A page-table page contains 512 64-bit PTEs.
+// A 64-bit virtual address is split into five fields:
+//   39..63 -- must be zero.
+//   30..38 -- 9 bits of level-2 index.
+//   21..29 -- 9 bits of level-1 index.
+//   12..20 -- 9 bits of level-0 index.
+//    0..11 -- 12 bits of byte offset within the page.
+//
+//  Modified to take a parameter tolevel.
+//  walk will walk down to tolevel. It is usually 0, 
+//  but can be set to 1 for the purposes of mapping superpages
+//  (superpage PTE leaves are in the level 1 page table, 
+//  since the lower 21 bits are the 2MB offset, not 12 for 4kb
+
+// encode the level at which the the walk stopped
+// in the upper 2 bits of PTE
+pte_t 
+softwalk(pagetable_t pagetable, uint64 va, int alloc, int tolevel)
+{
+  if(va >= MAXVA)
+    panic("walk");
+
+  for(int level = 2; level > tolevel; level--) {
+    pte_t pte = pagetable[PX(level, va)];
+    if(pte & PTE_V) {
+      pagetable = (pagetable_t)PTE2PA(pte);
+      if(PTE_LEAF(pte)) {
+        printf("AM FUCK\n");
+        return pte | LEVEL2PTE(level);
+      }
+    } else {
+      panic("softwalk cannot allocate");
+    }
+  }
+  pte_t pte = pagetable[PX(tolevel, va)];
+  return pte | LEVEL2PTE(0);
 }
 
 // Look up a virtual address, return the physical address,
@@ -320,26 +370,40 @@ uvmcreate()
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
+  // TODO: need logic in here for when shriking a superpage
+  // When sbrk frees a superpage partially (e.g., freeing the last 4096 bytes of a superpage), you will need to "demote" a super page into regular pages.
   uint64 a;
-  pte_t *pte;
+  pte_t pte;
+  pte_t * pteptr;
   int sz = PGSIZE;
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += sz){
-    if((pte = walk(pagetable, a, 0, 0)) == 0) // leaf page table entry allocated?
+    if((pte = softwalk(pagetable, a, 0, 0)) == 0) // leaf page table entry allocated?
       continue;
-    if((*pte & PTE_V) == 0)  // has physical page been allocated?
+    if((pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
-    sz = PGSIZE;
-    if(PTE_FLAGS(*pte) == PTE_V)
+
+    if(PTE_LEVEL(pte) == 1) {
+      sz = PGSUPERPGSIZE;
+    } else {
+      sz = PGSIZE;
+    }
+    if(PTE_FLAGS(pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      uint64 pa = PTE2PA(pte);
+      if(sz == PGSUPERPGSIZE) {
+        ksuperfree((void*)pa);
+      } else {
+        kfree((void*)pa);
+      }
     }
-    *pte = 0;
+    // get the real pte?
+    pteptr = walk(pagetable, a, 0, 0);
+    *pteptr = 0;
   }
 }
 
@@ -402,6 +466,7 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   if(newsz >= oldsz)
     return oldsz;
 
+  // TODO: i don't think this needs to change when it comes to superpages
   if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
     int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
     uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);
@@ -462,14 +527,30 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0) {
       continue;
     }
-    szinc = PGSIZE;
+    if(PTE_LEVEL(*pte) == 1) {
+      szinc = PGSUPERPGSIZE;
+    } else {
+      szinc = PGSIZE;
+    }
+
+    // PTE2PA should still work for superpage PTEs
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if(szinc == PGSUPERPGSIZE) {
+      mem = ksuperalloc();
+    } else {
+      mem = kalloc();
+    }
+    if(mem == 0)
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    memmove(mem, (char*)pa, szinc);
+    if(mappages(new, i, szinc, (uint64)mem, flags) != 0){
+      if(szinc == PGSUPERPGSIZE) {
+        ksuperfree(mem);
+      } else {
+        kfree(mem);
+      }
       goto err;
     }
   }

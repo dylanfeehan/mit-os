@@ -380,9 +380,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 
 
 
-#if defined(LAB_MMAP) || defined(LAB_PGTBL) || defined(LAB_COW)
 #define PTE_LEAF(pte) (((pte) & PTE_R) | ((pte) & PTE_W) | ((pte) & PTE_X))
-#endif
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
@@ -400,7 +398,11 @@ typedef uint64 *pagetable_t; // 512 PTEs
 
 #define PTE2PA(pte) (((pte) >> 10) << 12)
 
+#define LEVEL2PTE(level) ((uint64)level << 62)
+
 #define PTE_FLAGS(pte) ((pte) & 0x3FF)
+
+#define PTE_LEVEL(pte) (((uint64)pte) >> 62)
 
 // extract the three 9-bit page table indices from a virtual address.
 #define PXMASK          0x1FF // 9 bits
