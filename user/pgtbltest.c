@@ -162,6 +162,7 @@ superpg_fork()
   } else if(pid == 0) {
     // reference freed memory; this should result in page fault and
     // the kernel should kill the child.
+    printf("Should see a store page fault (0xf) since we are attempting to write outside of legal memory.\n");
     * (end + 1) = '9'; 
   } else {
     int status;
@@ -217,6 +218,7 @@ superpg_free()
      // space, since the parent freed it. The following reference
      // should result in page fault and the kernel should kill the
      // child.
+    printf("Should see a load page fault (0xd) since we are attempting to read outside of legal memory.\n");
     if (* (a + 1) == '9') {
       exit(0);
     }
