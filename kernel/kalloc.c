@@ -16,7 +16,7 @@ extern char end[]; // first address after kernel.
 
 // the number of superpages for kinit to set aside during initialization
 // these superpages will go in freelist_super
-int num_superpages = 10;
+int num_superpages = 25;
 
 struct run {
   struct run *next;

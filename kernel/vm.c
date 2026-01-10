@@ -164,7 +164,6 @@ softwalk(pagetable_t pagetable, uint64 va, int alloc, int tolevel)
     if(pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(pte);
       if(PTE_LEAF(pte)) {
-        printf("AM FUCK\n");
         return pte | LEVEL2PTE(level);
       }
     } else {
@@ -364,6 +363,29 @@ uvmcreate()
   return pagetable;
 }
 
+void
+copy_from_demoted_superpage(pagetable_t pagetable, uint64 superbase_va, uint64 superbase_pa, int npages)
+{
+  uint64 pa = superbase_pa;
+  uint64 a = superbase_va;
+  uint64 va_to_pa;
+  pte_t pte;
+  int i;
+  for(i = 0; i < npages; i++, a+=PGSIZE, pa+=PGSIZE) {
+    // get the PTE at the VA
+    if((pte = softwalk(pagetable, a, 0, 0)) == 0)
+      continue;
+    if((pte & PTE_V) == 0) {
+      continue;
+    }
+
+    va_to_pa = PTE2PA(pte);
+
+    memmove((void*)va_to_pa, (void*)pa, PGSIZE);
+  }
+  return;
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. It's OK if the mappings don't exist.
 // Optionally free the physical memory.
@@ -376,6 +398,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   pte_t pte;
   pte_t * pteptr;
   int sz = PGSIZE;
+  uint64 superbase;
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
@@ -386,24 +409,46 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if((pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
 
+    // clear the entry
+    pteptr = walk(pagetable, a, 0, 0);
+    *pteptr = 0;
+
     if(PTE_LEVEL(pte) == 1) {
-      sz = PGSUPERPGSIZE;
+      // size will be equal to the distance between a and the end of the superpage
+      // we find ourselves in a superpage
+      // this will happen once per call to uvmunmap because after this, a is superpage aligned
+      // we'll increment size to be from current a to the end of the current superpage
+      // oldsz will never be between current a and the end of the current superpage (invariant)
+      // sz == 0 implies a is at the beginning of the superpage
+      if (a % PGSUPERPGSIZE == 0) {
+        superbase = a;
+      } else {
+        superbase = SUPERPGROUNDDOWN(a);
+      }
+      // sz is how much to increment a by when done, so what is the size of virtual address range we are freeing
+      sz = SUPERPGROUNDUP(a+1) - a;
     } else {
       sz = PGSIZE;
     }
     if(PTE_FLAGS(pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
+      // if pte is from a superpage mapping
+      // PTE2PA effectivley gets the physical address of the base of the superpage
       uint64 pa = PTE2PA(pte);
-      if(sz == PGSUPERPGSIZE) {
+      if(PTE_LEVEL(pte) == 1) {
+        // always free the whole superpage
+        // map the addresses from the base of a superpage until a
+        // if a is superpage aligned, nothing needs to be remapped
+        if(superbase != a) {
+          uvmalloc(pagetable, superbase, a, PTE_FLAGS(pte));
+          copy_from_demoted_superpage(pagetable, superbase, pa, (a - superbase) / PGSIZE);
+        }
         ksuperfree((void*)pa);
       } else {
         kfree((void*)pa);
       }
     }
-    // get the real pte?
-    pteptr = walk(pagetable, a, 0, 0);
-    *pteptr = 0;
   }
 }
 
@@ -515,34 +560,35 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
-  pte_t *pte;
+  pte_t pte;
   uint64 pa, i;
   uint flags;
   char *mem;
   int szinc = PGSIZE;
 
   for(i = 0; i < sz; i += szinc){
-    if((pte = walk(old, i, 0, 0)) == 0)
+    if((pte = softwalk(old, i, 0, 0)) == 0)
       continue;
-    if((*pte & PTE_V) == 0) {
+    if((pte & PTE_V) == 0) {
       continue;
     }
-    if(PTE_LEVEL(*pte) == 1) {
+    if(PTE_LEVEL(pte) == 1) {
       szinc = PGSUPERPGSIZE;
     } else {
       szinc = PGSIZE;
     }
 
     // PTE2PA should still work for superpage PTEs
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
+    pa = PTE2PA(pte);
+    flags = PTE_FLAGS(pte);
     if(szinc == PGSUPERPGSIZE) {
       mem = ksuperalloc();
     } else {
       mem = kalloc();
     }
-    if(mem == 0)
+    if(mem == 0) {
       goto err;
+    }
 
     memmove(mem, (char*)pa, szinc);
     if(mappages(new, i, szinc, (uint64)mem, flags) != 0){
