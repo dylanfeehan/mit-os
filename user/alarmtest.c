@@ -10,8 +10,9 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/riscv.h"
-#include "user/user.h"
+#include "../user/user.h"
 
+void test();
 void test0();
 void test1();
 void test2();
@@ -23,6 +24,7 @@ void dummy_handler();
 int
 main(int argc, char *argv[])
 {
+  test();
   test0();
   test1();
   test2();
@@ -45,6 +47,13 @@ periodic()
   sigreturn();
   printf("oops, sigreturn returned!\n");
   exit(1);
+}
+
+void test() {
+  printf("Starting test.\n");
+  printf("sigalarm: %d\n", sigalarm(2, 0));
+  printf("sigreturn: %d\n", sigreturn());
+  printf("Test complete.\n");
 }
 
 // tests whether the kernel calls
