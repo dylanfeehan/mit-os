@@ -133,6 +133,28 @@ printf(char *fmt, ...)
   return 0;
 }
 
+// use frame pointers to read a stack trace
+// backtrace() should print saved return address 
+// of every stack frame in the kernel stack
+// fp will be used to walk up the kernel stack
+void 
+backtrace() 
+{
+  // declare frame pointer
+  uint64 fp;
+  uint64 * saved_fp;
+  uint64 saved_ra;
+  fp = r_fp();
+  uint64 kernel_stack_end = PGROUNDUP(fp);
+
+  while(fp != kernel_stack_end) {
+    saved_ra = *((uint64*)fp - 1);
+    printf("%p\n", (uint64*)saved_ra);
+    saved_fp = ((uint64*)fp)-2;
+    fp = *saved_fp;
+  }
+}
+
 void
 panic(char *s)
 {
